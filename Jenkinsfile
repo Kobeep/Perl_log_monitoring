@@ -9,20 +9,17 @@ pipeline {
             }
         }
 
-        stage('Install Perl and dependencies') {
+        stage('Build Docker Image') {
             steps {
                 script {
-                    // Rozpoznawanie systemu i instalacja Perla
-                    if (isUnix()) {
-                        if (sh(script: 'cat /etc/os-release | grep -i redhat', returnStatus: true) == 0) {
-                            // Instalacja Perl na RedHat/CentOS/Fedora
-                            sh 'sudo yum install -y perl'
-                        } else if (sh(script: 'cat /etc/os-release | grep -i debian', returnStatus: true) == 0 ||
-                                   sh(script: 'cat /etc/os-release | grep -i ubuntu', returnStatus: true) == 0) {
-                            // Instalacja Perl na Debian/Ubuntu
-                            sh 'sudo apt-get update && sudo apt-get install -y perl'
-                        }
-                    }
+                    sh 'docker build -t perl_log_monitoring .'
+                }
+            }
+        }
+        stage('Run Docker Container') {
+            steps {
+                script {
+                    sh 'docker run --rm perl_log_monitoring'
                 }
             }
         }
