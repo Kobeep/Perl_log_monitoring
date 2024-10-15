@@ -1,6 +1,6 @@
-FROM fedora:latest
+FROM ubuntu:22.04
 
-RUN dnf install -y perl git
+RUN apt install -y perl git libperl-dev
 
 COPY log_monitor.pl /tmp/log_monitor.pl
 

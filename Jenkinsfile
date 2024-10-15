@@ -2,48 +2,39 @@ pipeline {
     agent any
 
     stages {
-        stage('Checkout') {
-            steps {
-                // Pobieranie repozytorium z GIT
-                git branch: 'feature/Perl', url: 'https://github.com/Kobeep/Perl_log_monitoring.git'
-            }
-        }
-
-        stage('Build Docker Image') {
+        stage('Build Ubuntu Container') {
             steps {
                 script {
-                    sh 'docker build -t perl_log_monitoring .'
-                }
-            }
-        }
-        stage('Run Docker Container') {
-            steps {
-                script {
-                    sh 'docker run --rm perl_log_monitoring'
+                    sh 'docker build -t ubuntu-kobee .'
                 }
             }
         }
 
-        stage('Run Perl Script') {
+        stage('Test') {
             steps {
-                // Uruchomienie skryptu Perla
-                sh 'perl log_monitor.pl'
+
+                script {
+                    docker.image('ubuntu-kobee').inside {
+                        sh 'cd tmp/'
+                        sh 'perl log_monitor.pl'
+                    }
+                }
+            }
+        }
+
+        stage('Cleanup') {
+            steps {
+                script {
+                    sh 'docker system prune -af'
+                }
             }
         }
     }
 
     post {
         always {
-            // Czyszczenie środowiska
-            cleanWs()
-        }
-
-        success {
-            echo 'Build zakończony sukcesem!'
-        }
-
-        failure {
-            echo 'Build nie powiódł się.'
+            // Faza post-cleanup, gdyby coś jeszcze pozostało
+            cleanWs()  // Czyści workspace agenta Jenkinsa
         }
     }
 }
