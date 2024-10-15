@@ -5,12 +5,12 @@ pipeline {
         stage('Install dependencies and build Ubuntu Container') {
             steps {
                 script {
-                    sh 'sudo apt-get update'
-                    sh 'sudo apt-get install -y apt-transport-https ca-certificates curl software-properties-common'
+                    sh 'apt-get update'
+                    sh 'apt-get install -y apt-transport-https ca-certificates curl software-properties-common'
                     sh 'curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -'
-                    sh 'sudo add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"'
-                    sh 'sudo apt-get update'
-                    sh 'sudo apt-get install -y docker-ce'
+                    sh 'add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"'
+                    sh 'apt-get update'
+                    sh 'apt-get install -y docker-ce'
                     sh 'docker --version'
 
                 }
