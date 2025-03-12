@@ -2,114 +2,86 @@
 use strict;
 use warnings;
 use IO::Handle;
+use File::Tail;
+use POSIX qw(setsid);
+use Carp;
 
-# Detect the operating system
-sub detect_os {
-    open(my $os_fh, '<', '/etc/os-release') or die "Cannot open /etc/os-release: $!";
-    my %os_info;
+use lib 'lib';
+use Utils qw(log_message detect_os);
+use Constants qw($POLL_INTERVAL %PATTERNS);
 
-    while (<$os_fh>) {
-        chomp;
-        if (/^(\w+)=(.*)$/) {
-            my ($key, $value) = ($1, $2);
-            $value =~ s/^"//;
-            $value =~ s/"$//;
-            $os_info{$key} = $value;
-        }
-    }
-    close($os_fh);
-    return $os_info{ID} // 'unknown';
+if ($> != 0) {
+    exec("sudo", $0, @ARGV) or die "Failed to execute with sudo: $!";
 }
+STDOUT->autoflush(1);
 
-# Define log files based on the OS
+$SIG{INT}  = sub { log_message("Received SIGINT, exiting..."); exit 0; };
+$SIG{TERM} = sub { log_message("Received SIGTERM, exiting..."); exit 0; };
+
 my $os = detect_os();
 my @log_files;
-
-if ($os eq 'ubuntu' || $os eq 'debian') {
+if ($os =~ /^(ubuntu|debian)$/i) {
     @log_files = ('/var/log/syslog', '/var/log/kern.log');
-    print "Detected OS: Debian/Ubuntu. Using /var/log/syslog and /var/log/kern.log.\n";
-} elsif ($os eq 'rhel' || $os eq 'centos' || $os eq 'fedora') {
-    @log_files = ('/var/log/messages', '/var/log/dmesg');
-    print "Detected OS: Red Hat/CentOS/Fedora. Using /var/log/messages and /var/log/dmesg.\n";
+    log_message("Detected OS: Debian/Ubuntu. Using /var/log/syslog and /var/log/kern.log.");
+} elsif ($os =~ /fedora/i || $os =~ /rhel/i || $os =~ /centos/i) {
+    @log_files = ('/var/log/messages');
+    if (-e '/var/log/dmesg') {
+         push @log_files, '/var/log/dmesg';
+         log_message("Detected OS: Red Hat/CentOS/Fedora. Using /var/log/messages and /var/log/dmesg.");
+    } else {
+         log_message("Detected OS: Red Hat/CentOS/Fedora. /var/log/dmesg not found. Using only /var/log/messages.");
+    }
+} elsif ($os =~ /asahi/i) {
+    @log_files = ('/var/log/syslog', '/var/log/kern.log');
+    log_message("Detected OS: Asahi Linux. Using /var/log/syslog and /var/log/kern.log.");
 } else {
-    die "Unsupported or unknown operating system.\n";
+    die "Unsupported or unknown operating system: $os.\n";
 }
 
-# Patterns to detect events in the logs (USB events, kernel errors, software crashes, etc.)
-my %patterns = (
-    usb_insert   => qr/usb\s+\d-\d:\s+new\s+/i,
-    usb_remove   => qr/usb\s+\d-\d:\s+USB\s+disconnect/i,
-    kernel_error => qr/kernel:.*(error|warn|fail)/i,
-    software_crash => qr/(segmentation fault|crash|core dumped|oom-killer|out of memory|fatal)/i,
-);
-
-# Function to monitor a log file
 sub monitor_log {
     my ($logfile) = @_;
+    log_message("Monitoring log file: $logfile");
 
-    open(my $log_fh, '<', $logfile) or die "Cannot open $logfile: $!";
-    seek($log_fh, 0, 2);  # Move file pointer to the end to read new entries
+    my $file = File::Tail->new(
+        name        => $logfile,
+        interval    => $POLL_INTERVAL,
+        maxinterval => $POLL_INTERVAL * 2,
+        adjustafter => 7,
+    );
 
-    print "Monitoring log file: $logfile\n";
-
-    while (1) {
-        while (my $line = <$log_fh>) {
-            chomp($line);
-
-            # USB device insertion
-            if ($line =~ $patterns{usb_insert}) {
-                print "USB Device Inserted: $line\n";
-            }
-
-            # USB device removal
-            if ($line =~ $patterns{usb_remove}) {
-                print "USB Device Removed: $line\n";
-            }
-
-            # Kernel errors/warnings
-            if ($line =~ $patterns{kernel_error}) {
-                print "Kernel Error/Warning: $line\n";
-            }
-
-            # Software crashes (segmentation fault, core dump, OOM, etc.)
-            if ($line =~ $patterns{software_crash}) {
-                print "Software Crash Detected: $line\n";
-                # Example action: trigger an email alert or restart a service
-                # system("mail -s 'Software Crash Detected' admin@example.com < /dev/null");
-            }
-        }
-
-        sleep(2);  # Poll interval to avoid high CPU usage
-
-        # Reopen log file in case of log rotation
-        if (!open($log_fh, '<', $logfile)) {
-            print "Failed to reopen log file: $!\n";
-            last;
-        }
-        seek($log_fh, 0, 2);  # Reposition at the end of the log file
+    while (defined(my $line = $file->read)) {
+         chomp($line);
+         if ($line =~ $PATTERNS{usb_insert}) {
+             log_message("USB Device Inserted: $line");
+         }
+         if ($line =~ $PATTERNS{usb_remove}) {
+             log_message("USB Device Removed: $line");
+         }
+         if ($line =~ $PATTERNS{kernel_error}) {
+             log_message("Kernel Error/Warning: $line");
+         }
+         if ($line =~ $PATTERNS{software_crash}) {
+             log_message("Software Crash Detected: $line");
+         }
     }
-
-    close($log_fh);
 }
 
-# Main function to monitor multiple log files
 sub main {
-    my @log_pids;
-
+    my @children;
     foreach my $logfile (@log_files) {
         my $pid = fork();
-
-        if ($pid == 0) {
-            # Child process will monitor the log file
-            monitor_log($logfile);
-            exit(0);  # Ensure child process exits after monitoring
+        if (!defined $pid) {
+            carp "Failed to fork for $logfile: $!";
+            next;
         }
-        push @log_pids, $pid;
+        if ($pid == 0) {
+            monitor_log($logfile);
+            exit(0);
+        }
+        push @children, $pid;
     }
-
-    # Parent process waits for all child processes to finish
-    foreach my $pid (@log_pids) {
-        waitpid($pid, 0);
+    foreach my $child (@children) {
+        waitpid($child, 0);
     }
 }
 
